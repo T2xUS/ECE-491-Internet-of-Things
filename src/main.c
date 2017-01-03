@@ -8,6 +8,7 @@
 #include <math.h>
 
 #include "stm32f4xx_conf.h"
+#include "main.h"
 
 #define BUFFER_SIZE 16
 
@@ -18,6 +19,8 @@
 // Private variables
 volatile uint32_t time_var1, time_var2, debounce;
 volatile char received_buffer[BUFFER_SIZE+1];
+
+volatile unsigned char isProcessing = 0; // flag indicating that tasks are being processed
 
 void InitPLL(void);
 void InitUSART(void);
@@ -41,69 +44,40 @@ void SendDebug(void);
 
 int main(void) {
 
-    /* Configure interrupts */
-    INTTIM2_Config();
-    INTPD0_Config();
-    
     /* Configure microcontroller */
     RCC_DeInit(); // default settings so that PLL can be configured
     InitPLL();
     InitUSART();
     InitGPIO();
-    //InitDAC();
+
+
+    unsigned char i = 0;
+
+    tasks[0].period = 1000;
+    tasks[0].elapsed_time = tasks[i].period;
+    tasks[0].task_function = &Task1Function;
+
+    tasks[1].period = 1000;
+    tasks[1].elapsed_time = tasks[i].period;
+    tasks[1].task_function = &Task2Function;
 
     SendDebug();
-    
-    /* Set up mp3 decoder */
-    /*
-    MP3FrameInfo mp3FrameInfo;
-    HMP3Decoder hMP3Decoder;
-    hMP3Decoder = MP3InitDecoder();
 
-    int offset, err;
-    static const char *read_ptr = mp3_data;
+    /* Configure interrupts */
+    INTPD0_Config();
+    INTTIM2_Config();
 
-    for(;;) {
 
-        offset = MP3FindSyncWord((unsigned char*)read_ptr, bytes_left);
-        bytes_left -= offset;
+    //TimerSet(TIMER_TICK);
+    //TimerOn();
+    /*INTTIM_Config();*/
 
-        // skip the end of the song, maybe to loop faster?
-        if (bytes_left <= 10000) {
-            read_ptr = mp3_data;
-            bytes_left = MP3_SIZE;
-            offset = MP3FindSyncWord((unsigned char*)read_ptr, bytes_left);
-        }
-
-        read_ptr += offset;
-        err = MP3Decode(hMP3Decoder, (unsigned char**)&read_ptr, &bytes_left, samples, 0);
-
-        if (err) {
-            // error occurred
-            switch (err) {
-            case ERR_MP3_INDATA_UNDERFLOW:
-                outOfData = 1;
-                break;
-            case ERR_MP3_MAINDATA_UNDERFLOW:
-                // do nothing - next call to decode will provide more mainData
-                break;
-            case ERR_MP3_FREE_BITRATE_SYNC:
-            default:
-                outOfData = 1;
-                break;
-            }
-        } else {
-            // no error
-            MP3GetLastFrameInfo(hMP3Decoder, &mp3FrameInfo);
-        }
-
-        if (!outOfData) {
-            ProvideAudioBuffer(samples, mp3FrameInfo.outputSamps);
-        }
+    while(1) {
+        /*PWR_EnterSTANDBYMode();*/
     }
-    */
 
     return 0;
+
 }
 
 // -------------------------- //
@@ -121,33 +95,33 @@ void SendDebug() {
 
     /* Check SYSCLK source, should be 0x08 if PLL */
     sprintf(buffer, "SYSCLK source: %d\n", RCC_GetSYSCLKSource());
-    SendData(USART2, buffer);
+    SendData(USART3, buffer);
 
     /* Check prescalers, HSI, VCO, SYSCLK, AHB, APB1 frequencies */
     sprintf(buffer, "fHSI: %lu\n", HSI_VALUE); // 16MHz
-    SendData(USART2, buffer);
+    SendData(USART3, buffer);
 
     int pllm = RCC->PLLCFGR & RCC_PLLCFGR_PLLM;
     int plln = (RCC->PLLCFGR & RCC_PLLCFGR_PLLN) >> 6;
     int pllvco = HSI_VALUE * plln / pllm;
     sprintf(buffer, "PLLN: %d\n", plln);    // 8
-    SendData(USART2, buffer);
+    SendData(USART3, buffer);
     sprintf(buffer, "PLLM: %d\n", pllm);    // 96
-    SendData(USART2, buffer);
+    SendData(USART3, buffer);
     sprintf(buffer, "fVCO: %d\n", pllvco);  // 192MHz
-    SendData(USART2, buffer);
+    SendData(USART3, buffer);
 
     RCC_ClocksTypeDef clkfreqs;
     RCC_GetClocksFreq(&clkfreqs);
     int pllp = (((RCC->PLLCFGR & RCC_PLLCFGR_PLLP) >> 16) + 1 ) * 2;
     sprintf(buffer, "PLLP: %d\n", pllp);    // 2
-    SendData(USART2, buffer);
+    SendData(USART3, buffer);
     sprintf(buffer, "fSYS/fPLL: %d\n", (int)clkfreqs.SYSCLK_Frequency); // 96MHz
-    SendData(USART2, buffer);
+    SendData(USART3, buffer);
     sprintf(buffer, "fAHB: %d\n", (int)clkfreqs.HCLK_Frequency);         // 48MHz
-    SendData(USART2, buffer);
+    SendData(USART3, buffer);
     sprintf(buffer, "fAPB1: %d\n", (int)clkfreqs.PCLK1_Frequency);       // 24MHz
-    SendData(USART2, buffer);
+    SendData(USART3, buffer);
 }
 
 // -------------------------- //
@@ -189,8 +163,8 @@ void InitUSART(void) {
     /* Configure AHB and APB1 for USART clock */
     RCC_HCLKConfig(RCC_SYSCLK_Div2); // fAHB = fSYS/2 = 48MHz
     RCC_PCLK1Config(RCC_HCLK_Div2); // fAPB1 = fAHB/2 = 24MHz
-    RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE); // turn on AHB for Tx/Rx
-    RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART2, ENABLE); // turn on APB1
+    RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE); // turn on AHB for Tx/Rx
+    RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART3, ENABLE); // turn on APB1
 
     /* Physical debugging; check MCO1/MCO2 with O-scope */
     RCC_MCO2Config(RCC_MCO2Source_SYSCLK, RCC_MCO2Div_1); // check SYSCLK w/ no division
@@ -205,20 +179,20 @@ void InitUSART(void) {
 
     // I/O
 
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_2 | GPIO_Pin_3;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_10 | GPIO_Pin_11;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
     GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
     GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
     GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
-    GPIO_Init(GPIOA, &GPIO_InitStructure);
+    GPIO_Init(GPIOC, &GPIO_InitStructure);
 
-    /* Use PA2 and PA3 for Tx and Rx */
-    GPIO_PinAFConfig(GPIOA, GPIO_PinSource2, GPIO_AF_USART2);
-    GPIO_PinAFConfig(GPIOA, GPIO_PinSource3, GPIO_AF_USART2);
+    /* Use PA10 and PA11 for Tx and Rx */
+    GPIO_PinAFConfig(GPIOC, GPIO_PinSource10, GPIO_AF_USART3);
+    GPIO_PinAFConfig(GPIOC, GPIO_PinSource11, GPIO_AF_USART3);
 
     // Conf
 
-    USART_OverSampling8Cmd(USART2, ENABLE); // oversample by 8 to increase baud rate cap
+    USART_OverSampling8Cmd(USART3, ENABLE); // oversample by 8 to increase baud rate cap
 
     USART_InitStructure.USART_BaudRate = 2e6;
     USART_InitStructure.USART_WordLength = USART_WordLength_8b;
@@ -226,13 +200,13 @@ void InitUSART(void) {
     USART_InitStructure.USART_Parity = USART_Parity_No;
     USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
     USART_InitStructure.USART_Mode = USART_Mode_Tx | USART_Mode_Rx;
-    USART_Init(USART2, &USART_InitStructure); // initialize with parameteters
+    USART_Init(USART3, &USART_InitStructure); // initialize with parameteters
 
     // Enable the interrupt
-    /*USART_ITConfig(USART2, USART_IT_RXNE, ENABLE);*/
+    /*USART_ITConfig(USART3, USART_IT_RXNE, ENABLE);*/
 
     // Enable
-    USART_Cmd(USART2, ENABLE);
+    USART_Cmd(USART3, ENABLE);
 }
 
 /* Writes out a string to the passed in USART */
@@ -270,7 +244,7 @@ void InitGPIO(void) {
     GPIO_Init(GPIOD, &GPIO_InitStructure);
 
     /* Configure output pins for MCO1, MCO2 */
-    
+
     RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
     RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE);
 
@@ -429,7 +403,7 @@ void EXTI0_IRQHandler(void) {
     if (EXTI_GetITStatus(EXTI_Line0) != RESET) {
         if (debounce == 0) {
             IncrementCounter();
-            SendData(USART2, "Hello world\n\r");
+            SendData(USART3, "Hello world\n\r");
             debounce = 500;
         }
 
@@ -441,6 +415,8 @@ void EXTI0_IRQHandler(void) {
 /* Handle timer interrupt */
 void TIM2_IRQHandler(void) {
 
+    unsigned char i;
+
     if (TIM_GetITStatus(TIM2, TIM_IT_Update) != RESET) {
         TIM_ClearITPendingBit(TIM2, TIM_IT_Update);
         if (time_var1) {
@@ -450,9 +426,32 @@ void TIM2_IRQHandler(void) {
         if (debounce) { // debounce pin 0
             debounce--;
         }
-        if (time_var2 % 100 == 0) {
+        if (time_var2 % 500 == 0) {
             //Do stuff
-            //IncrementCounter();
+            /*IncrementCounter();*/
+            char buffer[256];
+            for (int i = 0; i < 256; i++) {
+                buffer[i] = 0;
+            }
+
+            sprintf(buffer, "ip: %d\n", isProcessing);
+            SendData(USART3, buffer);
+        }
+
+        if (isProcessing == 0) {
+            isProcessing = 1;
+            for (i = 0; i < N_TASKS; i++) {
+                // Execute task function when period is reached
+                if (tasks[i].elapsed_time >= tasks[i].period) {
+                    tasks[i].task_function();
+                    tasks[i].elapsed_time = 0; // reset elapsed time
+                }
+                tasks[i].elapsed_time += TIMER_TICK;
+            }
+            isProcessing = 0;
+            /*SendData(USART3, "BBBB\n");*/
+        } else {
+            /*IncrementCounter();*/
         }
     }
 }
@@ -461,4 +460,142 @@ void TIM2_IRQHandler(void) {
  * Dummy function to avoid compiler error
  */
 void _init() {
+}
+
+
+void Task1Function(void) {
+    static unsigned char init = 1;
+    if (init) { // Initialization behavior
+        SendData(USART3, "INIT1\n");
+        init = 0;
+    } else { // Normal behavior
+        IncrementCounter();
+    }
+    return;
+}
+
+void Task2Function(void) {
+    static unsigned char init = 1;
+    if (init) { // Initialization behavior
+        SendData(USART3, "INIT2\n");
+        init = 0;
+    } else { // Normal behavior
+        /*IncrementCounter();*/
+        SendData(USART3, "TASK2\n");
+    }
+    return;
+}
+
+void Task3Function(void) {
+    static unsigned char init = 1;
+    if (init) { // Initialization behavior
+        init = 0;
+    } else { // Normal behavior
+        /*SendData(USART3, "TASK3");*/
+        IncrementCounter();
+    }
+}
+
+
+/* Handle timer interrupt */
+void TIM_IRQHandler(void) {
+
+    /*unsigned char i;*/
+
+    /*IncrementCounter();*/
+    /*if (TIM_GetITStatus(TIM2, TIM_IT_Update) != RESET) {*/
+    /*TIM_ClearITPendingBit(TIM2, TIM_IT_Update);*/
+
+    /*if (!isProcessing) {*/
+    /*for (i = 0; i < N_TASKS; i++) {*/
+    /*// Execute task function when period is reached*/
+    /*if (tasks[i].elapsed_time >= tasks[i].period) {*/
+    /*tasks[i].task_function();*/
+    /*tasks[i].elapsed_time = 0; // reset elapsed time */
+    /*}*/
+    /*tasks[i].elapsed_time += TIMER_TICK;*/
+    /*}*/
+    /*isProcessing = 0;*/
+    /*} else {*/
+    /*printf("Tick occurred prematurely\n");*/
+    /*}*/
+    /*}*/
+}
+
+/* Configure timer interrupts */
+void INTTIM_Config(void) {
+
+    NVIC_InitTypeDef NVIC_InitStructure;
+    TIM_TimeBaseInitTypeDef TIM_TimeBaseStructure;
+
+    /* Select priority group 0, no preemption, only subpriorities */
+    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_0);
+
+    /* Configure (3) timer interrupts */
+    NVIC_InitStructure.NVIC_IRQChannel = TIM2_IRQn;
+    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;
+    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 1;
+    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+    NVIC_Init(&NVIC_InitStructure);
+
+    /*
+       NVIC_InitStructure.NVIC_IRQChannel = TIM3_IRQn;
+       NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;
+       NVIC_InitStructure.NVIC_IRQChannelSubPriority = 2;
+       NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+       NVIC_Init(&NVIC_InitStructure);
+
+       NVIC_InitStructure.NVIC_IRQChannel = TIM4_IRQn;
+       NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;
+       NVIC_InitStructure.NVIC_IRQChannelSubPriority = 3;
+       NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+       NVIC_Init(&NVIC_InitStructure);
+       */
+
+    /* Enable the clocks used for the timer */
+    RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
+    /*
+       RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3, ENABLE);
+       RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM4, ENABLE);
+       */
+
+    /* Time base configuration */
+    // NOT SURE IF I DID THIS CORRECTLY
+    // Assuming internal clock is used, refer to datasheet section about TIM2-5 (general purpose)
+    //TIMx->CR1: TIM_CounterMode and TIM_ClockDivision, also determines the clock source
+    //TIMx->ARR: TIM_Period
+    //TIMx->PSC: TIM_Prescaler
+    TIM_TimeBaseStructure.TIM_Period = 1000 - 1; // 1 MHz down to 1 KHz (1 ms) i.e. each tick is 1ms
+    TIM_TimeBaseStructure.TIM_Prescaler = 16 - 1; // 16 MHz Clock down to 1 MHz (adjust per your clock)
+    TIM_TimeBaseStructure.TIM_ClockDivision = 0;
+    TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;
+    TIM_TimeBaseInit(TIM2, &TIM_TimeBaseStructure);
+
+    /*
+       TIM_TimeBaseStructure.TIM_Period = 500 - 1; // 1 MHz down to 0.5 KHz (2 ms)
+       TIM_TimeBaseStructure.TIM_Prescaler = 16 - 1; // 24 MHz Clock down to 1 MHz (adjust per your clock)
+       TIM_TimeBaseStructure.TIM_ClockDivision = 0;
+       TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;
+       TIM_TimeBaseInit(TIM3, &TIM_TimeBaseStructure);
+
+       TIM_TimeBaseStructure.TIM_Period = 250 - 1; // 1 MHz down to 0.25 KHz (4 ms)
+       TIM_TimeBaseStructure.TIM_Prescaler = 16 - 1; // 24 MHz Clock down to 1 MHz (adjust per your clock)
+       TIM_TimeBaseStructure.TIM_ClockDivision = 0;
+       TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;
+       TIM_TimeBaseInit(TIM4, &TIM_TimeBaseStructure);
+       */
+
+    /* Enable the timer interrupts */
+    TIM_ITConfig(TIM2, TIM_IT_Update, ENABLE);
+    /*
+       TIM_ITConfig(TIM3, TIM_IT_Update, ENABLE);
+       TIM_ITConfig(TIM4, TIM_IT_Update, ENABLE);
+       */
+
+    /* Enable actual timers */
+    TIM_Cmd(TIM2, ENABLE);
+    /*
+       TIM_Cmd(TIM3, ENABLE);
+       TIM_Cmd(TIM4, ENABLE);
+       */
 }
