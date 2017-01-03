@@ -84,7 +84,7 @@ int main(void) {
     /*INTTIM_Config();*/
 
     while(1) {
-        HandlePacket()
+        HandlePacket();
         /*PWR_EnterSTANDBYMode();*/
     }
 
